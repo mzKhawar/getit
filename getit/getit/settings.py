@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'weight_log.apps.WeightLogConfig',
+    'workout_log.apps.WorkoutLogConfig',
 ]
 
 MIDDLEWARE = [
