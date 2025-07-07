@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"os"
 	"time"
 )
 
@@ -12,8 +16,10 @@ type Service interface {
 	GetUserById(ctx context.Context, id int) (UserResponse, error)
 	UpdateEmail(ctx context.Context, id int, request UpdateEmailRequest) error
 	DeleteUser(ctx context.Context, id int) error
-	Register(ctx context.Context, request RegisterRequest) (UserResponse, error)
+	Register(ctx context.Context, request RegisterRequest) (UserResponse, string, error)
 	Authenticate(ctx context.Context, request AuthenticationRequest) (string, error)
+	GenerateJwt(user *User) (string, error)
+	ValidateJwt(tokenString string) error
 }
 
 type ApiService struct {
@@ -53,21 +59,25 @@ func (s *ApiService) DeleteUser(ctx context.Context, id int) error {
 	return s.store.DeleteUser(ctx, id)
 }
 
-func (s *ApiService) Register(ctx context.Context, request RegisterRequest) (UserResponse, error) {
+func (s *ApiService) Register(ctx context.Context, request RegisterRequest) (UserResponse, string, error) {
 	var usr User
 	usr.Email = request.Email
 	hashedPass, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return UserResponse{}, err
+		return UserResponse{}, "", err
 	}
 	usr.Password = string(hashedPass)
 	usr.CreatedAt = time.Now()
 	savedUser, err := s.store.CreateUser(ctx, &usr)
 	if err != nil {
-		return UserResponse{}, fmt.Errorf("error saving user: %v", err)
+		return UserResponse{}, "", fmt.Errorf("error saving user: %v", err)
 	}
 	res := mapUserToResponse(savedUser)
-	return res, nil
+	signedKey, err := s.GenerateJwt(savedUser)
+	if err != nil {
+		return UserResponse{}, "", fmt.Errorf("error creating jwt: %v", err)
+	}
+	return res, signedKey, nil
 }
 
 func (s *ApiService) Authenticate(ctx context.Context, request AuthenticationRequest) (string, error) {
@@ -78,7 +88,50 @@ func (s *ApiService) Authenticate(ctx context.Context, request AuthenticationReq
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(request.Password)); err != nil {
 		return "", fmt.Errorf("invalid password")
 	}
-	return "jwt", nil
+	signedJwt, err := s.GenerateJwt(user)
+	if err != nil {
+		return "", fmt.Errorf("error generating jwt: %v", err)
+	}
+	return signedJwt, nil
+}
+
+func (s *ApiService) GenerateJwt(user *User) (string, error) {
+	claims := jwt.RegisteredClaims{
+		Issuer:    "getit-api",
+		Subject:   user.Email,
+		Audience:  []string{"getit-frontend"},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		NotBefore: jwt.NewNumericDate(time.Now()),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		ID:        uuid.NewString(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	secret := os.Getenv("JWT_SECRET")
+	signedString, err := token.SignedString([]byte(secret))
+	if err != nil {
+		return "", err
+	}
+	return signedString, nil
+}
+
+func (s *ApiService) ValidateJwt(tokenString string) error {
+	secret := os.Getenv("JWT_SECRET")
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+
+	switch {
+	case token.Valid:
+		return nil
+	case errors.Is(err, jwt.ErrTokenMalformed):
+		return fmt.Errorf("malformed token: %v", err)
+	case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+		return fmt.Errorf("invalid token signature: %v", err)
+	case errors.Is(err, jwt.ErrTokenExpired) || errors.Is(err, jwt.ErrTokenNotValidYet):
+		return fmt.Errorf("token expired or not valid yet: %v", err)
+	default:
+		return fmt.Errorf("could not handle token: %v", err)
+	}
 }
 
 func mapUserToResponse(u *User) UserResponse {

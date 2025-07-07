@@ -23,7 +23,7 @@ func (s *ApiServer) Run() {
 	router := gin.Default()
 	{
 		users := router.Group("/users")
-		users.GET("/", s.HandleGetUsers)
+		users.GET("/", s.JwtMiddleware, s.HandleGetUsers)
 		users.GET("/:id", s.HandleGetUserById)
 		users.PATCH("/:id", s.HandleUpdateEmail)
 		users.DELETE("/:id", s.HandleDeleteUser)
@@ -107,14 +107,14 @@ func (s *ApiServer) HandleRegister(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	usrResponse, err := s.service.Register(c, registerReq)
+	usrResponse, jwt, err := s.service.Register(c, registerReq)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	location := fmt.Sprintf("users/%d", usrResponse.Id)
 	c.Header("Location", location)
-	c.Status(http.StatusCreated)
+	c.JSON(http.StatusCreated, gin.H{"jwt": jwt})
 }
 
 func (s *ApiServer) HandleAuthenticate(c *gin.Context) {
@@ -129,4 +129,18 @@ func (s *ApiServer) HandleAuthenticate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"jwt": jwt})
+}
+
+// TODO: need to check if jwt user is the same
+func (s *ApiServer) JwtMiddleware(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" || authHeader[:7] != "Bearer " {
+		c.AbortWithStatus(http.StatusUnauthorized)
+		return
+	}
+	jwt := authHeader[7:]
+	if err := s.service.ValidateJwt(jwt); err != nil {
+		c.AbortWithError(http.StatusUnauthorized, err)
+		return
+	}
 }
