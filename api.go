@@ -21,12 +21,13 @@ func NewApiServer(listenAddr string, service Service) *ApiServer {
 
 func (s *ApiServer) Run() {
 	router := gin.Default()
+	protected := router.Group("", s.JwtMiddleware)
 	{
-		users := router.Group("/users")
-		users.GET("/", s.JwtMiddleware, s.HandleGetUsers)
-		users.GET("/:id", s.HandleGetUserById)
-		users.PATCH("/:id", s.HandleUpdateEmail)
-		users.DELETE("/:id", s.HandleDeleteUser)
+		users := protected.Group("/users")
+		users.GET("/", s.HandleGetUsers)
+		users.GET("/:userId", s.RequireUserMatch, s.HandleGetUserById)
+		users.PATCH("/:userId", s.RequireUserMatch, s.HandleUpdateEmail)
+		users.DELETE("/:userId", s.RequireUserMatch, s.HandleDeleteUser)
 	}
 	{
 		auth := router.Group("/auth")
@@ -49,7 +50,7 @@ func (s *ApiServer) HandleGetUsers(c *gin.Context) {
 }
 
 func (s *ApiServer) HandleGetUserById(c *gin.Context) {
-	idStr := c.Param("id")
+	idStr := c.Param("userId")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -64,7 +65,7 @@ func (s *ApiServer) HandleGetUserById(c *gin.Context) {
 }
 
 func (s *ApiServer) HandleUpdateEmail(c *gin.Context) {
-	idStr := c.Param("id")
+	idStr := c.Param("userId")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -88,7 +89,7 @@ func (s *ApiServer) HandleUpdateEmail(c *gin.Context) {
 }
 
 func (s *ApiServer) HandleDeleteUser(c *gin.Context) {
-	idStr := c.Param("id")
+	idStr := c.Param("userId")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -139,8 +140,30 @@ func (s *ApiServer) JwtMiddleware(c *gin.Context) {
 		return
 	}
 	jwt := authHeader[7:]
-	if err := s.service.ValidateJwt(jwt); err != nil {
-		c.AbortWithError(http.StatusUnauthorized, err)
+	token, err := s.service.ValidateJwt(jwt)
+	if err != nil {
+		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
+	user, err := s.service.GetUserFromValidJwt(c, token)
+	if err != nil {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+	c.Set("uId", user.Id)
+	c.Next()
+}
+
+func (s *ApiServer) RequireUserMatch(c *gin.Context) {
+	uIDFromToken := c.GetInt("uId")
+	paramId, err := strconv.Atoi(c.Param("userId"))
+	if err != nil {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+	if uIDFromToken != paramId {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+	c.Next()
 }

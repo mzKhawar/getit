@@ -19,7 +19,8 @@ type Service interface {
 	Register(ctx context.Context, request RegisterRequest) (UserResponse, string, error)
 	Authenticate(ctx context.Context, request AuthenticationRequest) (string, error)
 	GenerateJwt(user *User) (string, error)
-	ValidateJwt(tokenString string) error
+	ValidateJwt(tokenString string) (*jwt.Token, error)
+	GetUserFromValidJwt(ctx context.Context, token *jwt.Token) (*User, error)
 }
 
 type ApiService struct {
@@ -114,7 +115,7 @@ func (s *ApiService) GenerateJwt(user *User) (string, error) {
 	return signedString, nil
 }
 
-func (s *ApiService) ValidateJwt(tokenString string) error {
+func (s *ApiService) ValidateJwt(tokenString string) (*jwt.Token, error) {
 	secret := os.Getenv("JWT_SECRET")
 	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 		return []byte(secret), nil
@@ -122,16 +123,28 @@ func (s *ApiService) ValidateJwt(tokenString string) error {
 
 	switch {
 	case token.Valid:
-		return nil
+		return token, nil
 	case errors.Is(err, jwt.ErrTokenMalformed):
-		return fmt.Errorf("malformed token: %v", err)
+		return nil, fmt.Errorf("malformed token: %v", err)
 	case errors.Is(err, jwt.ErrTokenSignatureInvalid):
-		return fmt.Errorf("invalid token signature: %v", err)
+		return nil, fmt.Errorf("invalid token signature: %v", err)
 	case errors.Is(err, jwt.ErrTokenExpired) || errors.Is(err, jwt.ErrTokenNotValidYet):
-		return fmt.Errorf("token expired or not valid yet: %v", err)
+		return nil, fmt.Errorf("token expired or not valid yet: %v", err)
 	default:
-		return fmt.Errorf("could not handle token: %v", err)
+		return nil, fmt.Errorf("could not handle token: %v", err)
 	}
+}
+
+func (s *ApiService) GetUserFromValidJwt(ctx context.Context, t *jwt.Token) (*User, error) {
+	email, err := t.Claims.GetSubject()
+	if err != nil {
+		return nil, err
+	}
+	user, err := s.store.GetUserByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 func mapUserToResponse(u *User) UserResponse {
