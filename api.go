@@ -46,7 +46,12 @@ func (s *ApiServer) HandleGetUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, users)
+	var userResponses []UserResponse
+	for _, usr := range users {
+		res := mapUserToResponse(&usr)
+		userResponses = append(userResponses, res)
+	}
+	c.JSON(http.StatusOK, userResponses)
 }
 
 func (s *ApiServer) HandleGetUserById(c *gin.Context) {
@@ -61,7 +66,8 @@ func (s *ApiServer) HandleGetUserById(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	c.JSON(http.StatusOK, usr)
+	response := mapUserToResponse(usr)
+	c.JSON(http.StatusOK, response)
 }
 
 func (s *ApiServer) HandleUpdateEmail(c *gin.Context) {
@@ -108,14 +114,14 @@ func (s *ApiServer) HandleRegister(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	usrResponse, jwt, err := s.service.Register(c, registerReq)
+	user, token, err := s.service.Register(c, registerReq)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	location := fmt.Sprintf("users/%d", usrResponse.Id)
+	location := fmt.Sprintf("users/%d", user.Id)
 	c.Header("Location", location)
-	c.JSON(http.StatusCreated, gin.H{"jwt": jwt})
+	c.JSON(http.StatusCreated, gin.H{"token": token})
 }
 
 func (s *ApiServer) HandleAuthenticate(c *gin.Context) {
@@ -124,46 +130,49 @@ func (s *ApiServer) HandleAuthenticate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	jwt, err := s.service.Authenticate(c, authRequest)
+	token, err := s.service.Authenticate(c, authRequest)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"jwt": jwt})
+	c.JSON(http.StatusCreated, gin.H{"token": token})
 }
 
-// TODO: need to check if jwt user is the same
 func (s *ApiServer) JwtMiddleware(c *gin.Context) {
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" || authHeader[:7] != "Bearer " {
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
-	jwt := authHeader[7:]
-	token, err := s.service.ValidateJwt(jwt)
+	token := authHeader[7:]
+	validToken, err := s.service.ValidateJwt(token)
 	if err != nil {
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
-	user, err := s.service.GetUserFromValidJwt(c, token)
+	user, err := s.service.GetUserFromValidJwt(c, validToken)
 	if err != nil {
 		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
-	c.Set("uId", user.Id)
+	c.Set("tokenUserId", user.Id)
 	c.Next()
 }
 
 func (s *ApiServer) RequireUserMatch(c *gin.Context) {
-	uIDFromToken := c.GetInt("uId")
-	paramId, err := strconv.Atoi(c.Param("userId"))
-	if err != nil {
-		c.AbortWithStatus(http.StatusForbidden)
-		return
-	}
-	if uIDFromToken != paramId {
+	userIdFromToken := c.GetInt("tokenUserId")
+	paramUserId, err := strconv.Atoi(c.Param("userId"))
+	if err != nil || userIdFromToken != paramUserId {
 		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
 	c.Next()
+}
+
+func mapUserToResponse(u *User) UserResponse {
+	var res UserResponse
+	res.Id = u.Id
+	res.Email = u.Email
+	res.CreatedAt = u.CreatedAt
+	return res
 }

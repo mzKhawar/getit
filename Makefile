@@ -1,5 +1,5 @@
 build:
-	go build -o ./bin/deenquestapi
+	go build -o ./bin/getitapi
 
 run: build
-	./bin/deenquestapi
+	./bin/getitapi
