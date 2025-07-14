@@ -12,12 +12,12 @@ func main() {
 	}
 	ctx := context.Background()
 	pgStore, err := NewPostgresStore(ctx)
-	service := NewService(pgStore)
 	if err != nil {
 		log.Fatalf("unable to connect to db: %v", err)
 	}
+	service := NewService(pgStore)
 	if err := pgStore.Init(ctx); err != nil {
-		log.Fatal(err)
+		log.Fatalf("unable to initialize db: %v", err)
 	}
 	apiServer := NewApiServer(":8080", service)
 	apiServer.Run()
